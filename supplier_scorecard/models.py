@@ -3,6 +3,14 @@
 from dataclasses import dataclass, field, asdict
 
 
+def validate_quality(value: float) -> float:
+    """Validate quality is in range 1-5."""
+    q = float(value)
+    if q < 1.0 or q > 5.0:
+        raise ValueError(f"Quality must be between 1 and 5, got {q}")
+    return q
+
+
 @dataclass
 class LeadTimeRecord:
     """A single observed lead time for a supplier."""
@@ -36,6 +44,10 @@ class Supplier:
     quality: float
     lead_times: list = field(default_factory=list)
     notes: str = ""
+
+    def __post_init__(self):
+        """Validate quality range after initialization."""
+        object.__setattr__(self, "quality", validate_quality(self.quality))
 
     def to_dict(self):
         return {

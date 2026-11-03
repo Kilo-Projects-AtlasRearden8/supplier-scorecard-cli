@@ -5,7 +5,7 @@ import sys
 import uuid
 from datetime import date
 
-from .models import Supplier, LeadTimeRecord
+from .models import Supplier, LeadTimeRecord, validate_quality
 from .scoring import score_suppliers
 from .storage import Storage
 from .export import export_csv
@@ -20,12 +20,17 @@ def cmd_add(args, storage):
     if any(s.name.lower() == args.name.lower() for s in suppliers):
         print(f"A supplier named '{args.name}' already exists.")
         return 1
+    try:
+        quality = validate_quality(args.quality)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
     supplier = Supplier(
         id=new_id(),
         name=args.name,
         price=float(args.price),
         quoted_lead_time=int(args.lead_time),
-        quality=float(args.quality),
+        quality=quality,
         notes=args.notes or "",
     )
     suppliers.append(supplier)
@@ -76,6 +81,49 @@ def cmd_record(args, storage):
     return 0
 
 
+def cmd_show(args, storage):
+    """Show detailed supplier info including lead time history."""
+    suppliers = storage.load()
+    found = None
+    for s in suppliers:
+        if s.id == args.id:
+            found = s
+            break
+    if not found:
+        print(f"Supplier {args.id} not found.")
+        return 1
+    scored = score_suppliers([found] + [s for s in suppliers if s.id != found.id])
+    r = scored[0]
+    s = found
+    print(f"Supplier: {s.name} (ID: {s.id})")
+    print(f"  Price: ${s.price:.2f}")
+    print(f"  Quoted Lead Time: {s.quoted_lead_time} days")
+    print(f"  Quality: {s.quality}/5")
+    print(f"  Notes: {s.notes or '(none)'}")
+    print(f"  Scores: Price={r.price_score:.1f}, Speed={r.speed_score:.1f}, Quality={r.quality_score:.1f}, Overall={r.overall_score:.1f} (Rank #{r.rank})")
+    if s.lead_times:
+        print("  Lead Time History:")
+        for lt in s.lead_times:
+            diff = lt.actual_days - lt.quoted_days
+            status = "early" if diff < 0 else ("late" if diff > 0 else "on time")
+            print(f"    {lt.date}: quoted {lt.quoted_days}d, actual {lt.actual_days}d ({status}){f', ref: {lt.reference}' if lt.reference else ''}")
+    else:
+        print("  Lead Time History: (none recorded)")
+    return 0
+
+
+def cmd_remove(args, storage):
+    suppliers = storage.load()
+    initial_len = len(suppliers)
+    suppliers = [s for s in suppliers if s.id != args.id]
+    if len(suppliers) == initial_len:
+        print(f"Supplier {args.id} not found.")
+        return 1
+    storage.save(suppliers)
+    print(f"Removed supplier {args.id}.")
+    return 0
+
+
 def cmd_export(args, storage):
     suppliers = storage.load()
     scored = export_csv(suppliers, path=args.output)
@@ -110,6 +158,14 @@ def build_parser():
     p_record.add_argument("--quoted", type=int, dest="quoted", help="Quoted lead time (defaults to supplier's)")
     p_record.add_argument("--reference", default="", help="PO/reference number")
     p_record.set_defaults(func=cmd_record)
+
+    p_show = sub.add_parser("show", help="Show supplier details and lead time history")
+    p_show.add_argument("--id", required=True, help="Supplier id")
+    p_show.set_defaults(func=cmd_show)
+
+    p_remove = sub.add_parser("remove", help="Remove a supplier")
+    p_remove.add_argument("--id", required=True, help="Supplier id")
+    p_remove.set_defaults(func=cmd_remove)
 
     p_export = sub.add_parser("export", help="Export suppliers to CSV")
     p_export.add_argument("--output", default="suppliers.csv", help="Output CSV path")
